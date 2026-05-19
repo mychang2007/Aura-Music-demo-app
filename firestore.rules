@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    // Admin check (specific to this app's creator)
+    function isAdmin() { return isVerified() && request.auth.token.email == 'mychang0605@gmail.com'; }
+
+    // 2. Validation Helpers
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() <= 256 &&
+             data.displayName is string && data.displayName.size() <= 128 &&
+             (!data.keys().hasAny(['photoURL']) || (data.photoURL is string && data.photoURL.size() <= 1024));
+    }
+
+    function isValidPlaylist(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.ownerId == request.auth.uid &&
+             data.createdAt == request.time &&
+             data.updatedAt == request.time &&
+             data.isPublic is bool;
+    }
+
+    function isValidTrackItem(data) {
+      return data.trackId is string && data.trackId.size() <= 128 &&
+             data.title is string && data.title.size() <= 256 &&
+             data.artist is string && data.artist.size() <= 256 &&
+             data.source is string && (data.source == 'spotify' || data.source == 'youtube' || data.source == 'netease') &&
+             data.addedAt == request.time &&
+             data.duration is number;
+    }
+
+    // 3. Match Blocks
+    match /{document=**} { allow read, write: if false; }
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if false; // Users shouldn't be listable unless needed
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().uid == userId;
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL']);
+    }
+
+    match /playlists/{playlistId} {
+      allow get: if existing().isPublic == true || isOwner(existing().ownerId);
+      allow list: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || (resource.data.isPublic == true);
+      
+      allow create: if isVerified() && isValidId(playlistId) && isValidPlaylist(incoming()) &&
+                    incoming().keys().hasAll(['name', 'ownerId', 'isPublic', 'createdAt', 'updatedAt']) &&
+                    incoming().keys().size() == 5;
+      
+      allow update: if isVerified() && isOwner(existing().ownerId) &&
+                    incoming().updatedAt == request.time &&
+                    incoming().ownerId == existing().ownerId &&
+                    incoming().createdAt == existing().createdAt && (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'isPublic', 'updatedAt'])
+                    );
+      
+      allow delete: if isVerified() && isOwner(existing().ownerId);
+
+      // Tracks subcollection
+      match /tracks/{trackId} {
+        function playlistOwner() {
+          return get(/databases/$(database)/documents/playlists/$(playlistId)).data.ownerId;
+        }
+
+        allow read, list: if get(/databases/$(database)/documents/playlists/$(playlistId)).data.isPublic == true || 
+                            isOwner(playlistOwner());
+        
+        allow create: if isVerified() && isOwner(playlistOwner()) && isValidTrackItem(incoming());
+        allow update: if isVerified() && isOwner(playlistOwner()) && isValidTrackItem(incoming()) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['position']);
+        allow delete: if isVerified() && isOwner(playlistOwner());
+      }
+    }
+  }
+}

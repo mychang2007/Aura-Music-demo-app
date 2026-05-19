@@ -1,0 +1,8 @@
+{
+  "name": "Aura Music",
+  "description": "A refined cross-platform music player with multi-source streaming, playlist management, and immersive atmospheric visuals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
